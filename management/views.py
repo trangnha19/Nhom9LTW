@@ -1,7 +1,7 @@
 from django.shortcuts import render, redirect
 from django.db.models import Count, Q,Case, When, F, Sum, ExpressionWrapper, fields
 from django.contrib import messages
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from myapp.models import *
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from decimal import Decimal
@@ -21,7 +21,8 @@ def home(request):
         count_ontime = Sheet.objects.filter(date=today, status='Đúng Giờ').exclude(checkin=None).count()
         count_manage = User.objects.filter(profile__position__name='Trưởng phòng').count()
         count_employee = User.objects.filter(profile__position__name='Nhân viên').count()
-        count_leave_tody = DayOffRequest.objects.filter(start_date__lte=datetime.now().date(), end_date__gte=datetime.now().date(), status='approved').count()
+        # count_leave_today = DayOffRequest.objects.filter(start_date__lte=datetime.now().date(), end_date__gte=datetime.now().date(), status='approved').count()
+        count_leave_today = DayOffRequest.objects.filter(status='pending').count()
         count_dpm = Department.objects.count()
         count_it = User.objects.filter(profile__position__department__name='IT').count()
         count_nhansu = User.objects.filter(profile__position__department__name='Nhân sự').count()
@@ -37,8 +38,8 @@ def home(request):
         thietke_work = Sheet.objects.filter(user__profile__position__department__name='Thiết kế', date=datetime.now().date()).count()
         sanxuat_work = Sheet.objects.filter(user__profile__position__department__name='Sản xuất', date=datetime.now().date()).count()
         mkt_work = Sheet.objects.filter(user__profile__position__department__name='Marketing', date=datetime.now().date()).count()
-        letter_pending = Letter.objects.filter(status='Đang xử lý').count()
-        day_off_pending = DayOffRequest.objects.filter(status='pending').count()       
+        letter_pending = Letter.objects.filter(created_at__date=date.today()).count()
+        day_off_pending = DayOffRequest.objects.filter(status='pending').count()
         context = {'title': title,
                   'today': today,
                   'count_late': count_late,
@@ -48,7 +49,7 @@ def home(request):
                   'count_emp': count_emp,
                   'count_emp_male': count_emp_male,
                   'count_emp_female': count_emp_female,
-                  'count_leave_today': count_leave_tody,
+                  'count_leave_today': count_leave_today,
                   'count_dpm': count_dpm,
                   'count_it': count_it,
                   'count_nhansu': count_nhansu,
@@ -85,8 +86,7 @@ def employee(request):
             emp.status = status
             emp.save()
             messages.success(request, f"Trạng thái của nhân viên đã được cập nhật thành {dict(Profile.STATUS_CHOICES).get(status)}")
-            # Redirect lại trang hiện tại
-            return redirect('employee')  # Đảm bảo tên route 'employee' là đúng
+            return redirect('employee')
 
         # Bộ lọc và phân trang
         keyword = request.GET.get('keyword', '')
@@ -106,6 +106,9 @@ def employee(request):
             emps = emps.filter(profile__start_date__gte=start_date)
         elif end_date:
             emps = emps.filter(profile__start_date__lte=end_date)
+
+        if not emps.exists():
+            messages.error(request, 'Không tìm thấy người dùng nào.')
 
         paginator = Paginator(emps, 10)
         page_number = request.GET.get('page', '')
@@ -135,27 +138,39 @@ def employee(request):
     else:
         messages.warning(request, 'Không có quyền truy cập')
         return redirect('/')
-      
+
 def create_employee(request):
-    if request.user.is_authenticated:
-        title = 'Thêm nhân viên'
-        form_e = EmployeeCreateForm(request.POST or None)
-        form_p = ProfileForm(request.POST or None, request.FILES or None)
-        if request.POST:
-            if form_e.is_valid() and form_p.is_valid():
-                emp = form_e.save()
-                profile = form_p.save(False)
-                profile.user = emp
-                profile.save()
-                messages.success(request, 'Thêm nhân viên thành công')
-                return redirect('employee')
-        context = {'title': title,
-                   'form_e': form_e,
-                   'form_p': form_p}
-        return render(request, 'pages/create_employee.html', context)
-    else:
-        return redirect('/')
-      
+   if request.user.is_authenticated:
+       title = 'Thêm nhân viên'
+       form_e = EmployeeCreateForm(request.POST or None)
+       form_p = ProfileForm(request.POST or None, request.FILES or None)
+
+       if request.POST:
+           # Kiểm tra nếu form không hợp lệ
+           if not form_e.is_valid() or not form_p.is_valid():
+               messages.error(request, 'Thông tin nhập không hợp lệ. Vui lòng kiểm tra lại.')
+
+           # Kiểm tra trùng lặp email
+           elif User.objects.filter(email=form_e.cleaned_data.get('email')).exists():
+               messages.error(request, 'Email đã tồn tại trong hệ thống.')
+           else:
+               # Lưu thông tin nhân viên và profile
+               emp = form_e.save()
+               profile = form_p.save(commit=False)
+               profile.user = emp
+               profile.save()
+               messages.success(request, 'Thêm nhân viên thành công')
+               return redirect('employee')
+
+       context = {
+           'title': title,
+           'form_e': form_e,
+           'form_p': form_p
+       }
+       return render(request, 'pages/create_employee.html', context)
+   else:
+       return redirect('/')
+
 def update_employee(request, username):
     if request.user.is_superuser:
         try:
@@ -176,50 +191,70 @@ def update_employee(request, username):
             return render(request, 'pages/update_employee.html', context)
         except User.DoesNotExist:
             return redirect('home')
-    else: 
+    else:
         return redirect('home')
 
+
 def main_sheet(request):
-  if request.user.is_superuser:
-    title = 'Bảng công'
-    sheets = Sheet.objects.all().order_by('-date')
-    keyword = request.GET.get('keyword', '')
-    status = request.GET.get('status', '')
-    start_date = request.GET.get('start-date', '')
-    end_date = request.GET.get('end-date', '')
-    if keyword:
-      sheets = sheets.filter(user__username__icontains=keyword)
-    if status:
-      sheets = sheets.filter(status=status)
-    if start_date and end_date:
-      sheets = sheets.filter(date__range=[start_date, end_date])
-    elif start_date:
-      sheets = sheets.filter(date__range=[start_date, datetime.now().date()])
-    elif end_date:
-      sheets = sheets.filter(date__range=[datetime.now().date(), end_date])
-    paginator = Paginator(sheets, 6)
-    page_number = request.GET.get('page', '')
-    try:
-      page_obj = paginator.get_page(page_number)
-    except PageNotAnInteger:
-      page_obj = paginator.page(1)
-    except EmptyPage:
-      page_obj = paginator.page(paginator.num_pages)
-    query_params = request.GET.copy()
-    if 'page' in query_params:
-      query_params.pop('page')
-    context = {'title': title, 
-               'keyword': keyword,
-               'start_date': start_date,
-               'end_date': end_date,
-               'status': status,
-               'page_obj': page_obj,
-               'query_params': query_params.urlencode()}
-    return render(request, 'pages/main_sheet.html', context)
-  else:
-    messages.warning(request, 'Không có quyền truy cập')
-    return redirect('/')
-  
+    if request.user.is_superuser:
+        title = 'Bảng công'
+        sheets = Sheet.objects.all().order_by('-date')
+        keyword = request.GET.get('keyword', '')
+        status = request.GET.get('status', '')
+        start_date = request.GET.get('start-date', '')
+        end_date = request.GET.get('end-date', '')
+        department = request.GET.get('department', '')
+        today = request.GET.get('today', '')  # Lấy tham số "today"
+        departments = Department.objects.all()
+
+        # Bộ lọc
+        if keyword:
+            sheets = sheets.filter(user__username__icontains=keyword)
+        if department:
+            sheets = sheets.filter(user__profile__position__department__name=department)
+        if status:
+            sheets = sheets.filter(status=status)
+        if today:  # Lọc theo ngày hôm nay
+            sheets = sheets.filter(date=date.today())
+        elif start_date and end_date:
+            sheets = sheets.filter(date__range=[start_date, end_date])
+        elif start_date:
+            sheets = sheets.filter(date__range=[start_date, datetime.now().date()])
+        elif end_date:
+            sheets = sheets.filter(date__range=[datetime.now().date(), end_date])
+
+        # Phân trang
+        paginator = Paginator(sheets, 6)
+        page_number = request.GET.get('page', '')
+        try:
+            page_obj = paginator.get_page(page_number)
+        except PageNotAnInteger:
+            page_obj = paginator.page(1)
+        except EmptyPage:
+            page_obj = paginator.page(paginator.num_pages)
+
+        query_params = request.GET.copy()
+        if 'page' in query_params:
+            query_params.pop('page')
+
+        # Context
+        context = {
+            'title': title,
+            'keyword': keyword,
+            'start_date': start_date,
+            'end_date': end_date,
+            'status': status,
+            'page_obj': page_obj,
+            'department': department,
+            'departments': departments,
+            'query_params': query_params.urlencode()
+        }
+        return render(request, 'pages/main_sheet.html', context)
+    else:
+        messages.warning(request, 'Không có quyền truy cập')
+        return redirect('/')
+
+
 def total_salary(request):
     if request.user.is_superuser:
         title = 'Bảng lương'
@@ -264,8 +299,6 @@ def total_salary(request):
         ).annotate(
             total_work_hour=Sum('work_hour'),
             total_salary=F('user__profile__salary'),
-            late_count=Count(Case(When(status='Đến Muộn', then=1))),
-            total_late_early_count=F('late_count'),
             ot_sum=Sum('ot'),
             late_time=Sum('late_time'),
             days_worked=Count('date', distinct=True)
@@ -279,13 +312,10 @@ def total_salary(request):
                 start_date__month__lt=month_req
             ).aggregate(total_requests=Count('id'))['total_requests'] or 0
 
-            current_month_requests = approved_dayoff_requests.filter(
+            approved_days_off_current_month = approved_dayoff_requests.filter(
                 user__username=sheet['user__username'],
                 start_date__month=month_req
-            )
-            approved_days_off_current_month = current_month_requests.aggregate(
-                total_requests=Count('id')
-            )['total_requests'] or 0
+            ).aggregate( total_requests=Count('id'))['total_requests'] or 0
 
             # Adjust approved days off if yearly limit exceeds 12
             if previous_approved_days_off + approved_days_off_current_month > 12:
@@ -294,8 +324,7 @@ def total_salary(request):
             # Calculate attendance days and missing days
             sheet['prev_approved_days_off'] = previous_approved_days_off
             sheet['approved_days_off'] = approved_days_off_current_month
-            sheet['missing_days'] = max(0, num_days_in_month - sheet['days_worked'])
-            sheet['att_day'] = num_days_in_month - sheet['missing_days'] + approved_days_off_current_month
+            sheet['att_day'] = sheet['days_worked'] + approved_days_off_current_month
 
             # Calculate bonuses, penalties, and salary
             sheet['ot_sal'] = Decimal(100000) * Decimal(sheet['ot_sum'])
@@ -303,11 +332,9 @@ def total_salary(request):
             sheet['neg_sal'] = Decimal(100000) * Decimal(sheet['late_time'])
             sheet['real_salary'] = int(sheet['total_salary'] / Decimal(26) * sheet['att_day'])
 
-            # Default deductions
+            # Calculate deductions for BHXH and TNCN
             bhxh = 0
             tncn = 0
-
-            # Calculate deductions for BHXH and TNCN
             if sheet['days_worked'] > 12:
                 bhxh = int(sheet['total_salary'] * Decimal(10.5) / Decimal(100))
                 tncn = int(sheet['total_salary'] * Decimal(5) / Decimal(100))
@@ -316,7 +343,7 @@ def total_salary(request):
             sheet['tncn'] = tncn
 
             # Calculate final salary
-            real_sal = sheet['real_salary'] - bhxh - tncn + sheet['awrd'] + sheet['ot_sal']
+            real_sal = sheet['real_salary'] - sheet['neg_sal'] - bhxh - tncn + sheet['awrd'] + sheet['ot_sal']
             sheet['real_sal'] = real_sal
 
         return render(request, 'pages/total_salary.html', {
@@ -366,7 +393,7 @@ def letter(request):
     query_params = request.GET.copy()
     if 'page' in query_params:
       query_params.pop('page')
-    context = {'title': title, 
+    context = {'title': title,
                'topics': topics,
                'time': time,
                'topic_rq': topic_rq,
@@ -380,7 +407,7 @@ def letter(request):
 
 def admin_review_requests(request):
     title = 'Đơn nghỉ phép'
-    requests = DayOffRequest.objects.order_by('-start_date')    
+    requests = DayOffRequest.objects.order_by('-start_date')
     status = request.GET.get('status', '')
     start_date = request.GET.get('start-date', '')
     end_date = request.GET.get('end-date', '')
@@ -397,7 +424,7 @@ def admin_review_requests(request):
       requests = requests.filter(start_date__range=[start_date, datetime.now().date()])
     elif end_date:
       requests = requests.filter(start_date__range=[datetime.now().date(), end_date])
- 
+
     paginator = Paginator(requests, 10)
     page_number = request.GET.get('page', '')
     try:
@@ -417,10 +444,10 @@ def admin_review_requests(request):
         day_off_request.save()
         messages.success(request, 'Đã duyệt yêu cầu' if accept else 'Đã từ chối yêu cầu')
         return redirect('dayoff')
-    context = {'title': title, 
+    context = {'title': title,
                'start_date': start_date,
                'end_date': end_date,
                'status': status,
-               'page_obj': page_obj, 
+               'page_obj': page_obj,
                'query_params': query_params.urlencode()}
     return render(request, 'pages/admin_review_requests.html', context)

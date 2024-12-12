@@ -5,6 +5,7 @@ from django.contrib.auth.models import User, auth
 from datetime import datetime, timedelta
 from django.db.models import Sum, Max
 from django.contrib import messages
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 
 # Create your views here.
 def home(request):
@@ -39,47 +40,30 @@ def logout(request):
     return redirect('/')
 
 def profile_detail(request, username):
-    if request.user.is_authenticated:
-        try:
-            user = User.objects.get(username=username)
-        except User.DoesNotExist:
-            user = None
-        if user:
-            if request.user.is_superuser or request.user.username == username:
-                title = f'Hồ sơ {username}'
-                departments = Department.objects.all()
-                positions = Position.objects.filter(department=user.profile.position.department)
-                if request.POST:
-                    pos = request.POST.get('position')
-                    dep = request.POST.get('department')
-                    if pos and dep:
-                        try: 
-                            position = Position.objects.get(name=pos, department__name=dep)
-                        except Position.DoesNotExist:
-                            position = None
-                        if not position:
-                            messages.error(request, 'Không tìm thấy vị trí tại phòng đã chọn')
-                            return redirect('profile-detail', username)
-                    if pos and not dep:
-                        position = Position.objects.get(name=pos, department=user.profile.position.department)
-                    if dep and not pos:
-                        position = Position.objects.get(name=user.profile.position.name, department__name=dep)
-                    user.profile.position = position
-                    user.profile.save()
-                    messages.info(request, 'Cập nhật thành công')
-                context = {'title':title,
-                        'user':user,
-                        'positions': positions,
-                        'departments': departments}
-                return render(request, 'pages/profile_detail.html', context)
-            else:
-                messages.warning(request, 'Vào tài khoản của bản thân để xem')
-                return redirect('profile-detail', username=request.user.username)
-        else:
-            messages.error(request, 'Không tìm thấy người dùng này')
-            return redirect('home')
-    else:
-        return redirect('home')
+   try:
+       user = User.objects.get(username=username)
+   except User.DoesNotExist:
+       user = None
+
+
+   if user:
+       if request.user.is_superuser or request.user.username == username:
+           title = f'Hồ sơ {username}'
+           departments = Department.objects.all()
+           positions = Position.objects.filter(department=user.profile.position.department)
+
+
+           context = {
+               'title': title,
+               'user': user,
+               'positions': positions,
+               'departments': departments
+           }
+           return render(request, 'pages/profile_detail.html', context)
+       else:
+           return redirect('profile-detail', username=request.user.username)
+   else:
+       return redirect('home')
 
 def time_keeping(request):
     if request.user.is_authenticated:
@@ -124,11 +108,25 @@ def sheet(request, username):
                 sheets = sheets.filter(date__range=[start_date, datetime.now().date()])
             elif end_date:
                 sheets = sheets.filter(date__range=[datetime.now().date(), end_date])
+
+            paginator = Paginator(sheets, 6)
+            page_number = request.GET.get('page', '')
+            try:
+                page_obj = paginator.get_page(page_number)
+            except PageNotAnInteger:
+                page_obj = paginator.page(1)
+            except EmptyPage:
+                page_obj = paginator.page(paginator.num_pages)
+            query_params = request.GET.copy()
+            if 'page' in query_params:
+                query_params.pop('page')
             context = {'title': title,
-                        'start_date': start_date,
-                        'end_date': end_date,
-                        'status': status,
-                       'sheets': sheets}
+                       'start_date': start_date,
+                       'end_date': end_date,
+                       'status': status,
+                       'page_obj': page_obj,
+                       'query_params': query_params.urlencode()}
+
             return render(request, 'pages/sheet.html', context)
         else:
             messages.warning(request, 'Hãy vào tài khoản của mình để xem')
@@ -139,7 +137,7 @@ def sheet(request, username):
 
 def letters(request):
     if request.user.is_authenticated:
-        title = 'Hòm thư ý kiến'
+        title = 'Hộp thư góp ý'
         my_letters = Letter.objects.filter(user=request.user)
         form = LetterForm(request.POST or None)
         if request.POST:
