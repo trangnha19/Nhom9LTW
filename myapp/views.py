@@ -29,7 +29,7 @@ def login(request):
             auth.login(request, user)
             return redirect('/')
         else:
-            messages.error(request, 'Tài khoản hoặc mật khẩu không đúng')
+            messages.error(request, 'Tài khoản không hợp lệ!')
             return redirect('login')
     context = {'title': title,
                'form_li':form_li}

@@ -1,6 +1,19 @@
 <div class="col-12 d-flex justify-content-end">
   <form action="" class="col-8 d-flex gap-2 justify-content-end">
     <div>
+      <label for="keyword">Từ khóa</label>
+      <input class="form-control" id="keyword" type="text" placeholder="Họ tên" value="{{ keyword }}" name="keyword" style="height: 35.35px;">
+    </div>
+    <div>
+      <label for="select-dpm">Phòng ban</label><br>
+      <select id="select-dpm" name="dpm" class="form-select" style="cursor: pointer;">
+        <option>Tất cả</option>
+        {% for dpm in dpms %}
+        <option {% if dpm.name == dpm_req %} selected {% endif %}>{{ dpm.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <label for="select-status">Trạng thái</label><br>
       <select id="select-status" name="status" class="form-select" style="cursor: pointer;" aria-label="Default select example">
         <option value="">Tất Cả</option>

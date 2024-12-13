@@ -300,13 +300,13 @@ def total_salary(request):
             total_work_hour=Sum('work_hour'),
             total_salary=F('user__profile__salary'),
             ot_sum=Sum('ot'),
-            late_time=Sum('late_time'),
+            lt_sum=Sum('late_time'),
             days_worked=Count('date', distinct=True)
         ).order_by('user__id')
 
         # Calculate additional data for each sheet
         for sheet in sheets:
-            # Fetch approved day-off requests
+
             previous_approved_days_off = approved_dayoff_requests.filter(
                 user__username=sheet['user__username'],
                 start_date__month__lt=month_req
@@ -321,7 +321,7 @@ def total_salary(request):
             if previous_approved_days_off + approved_days_off_current_month > 12:
                 approved_days_off_current_month = max(0, 12 - previous_approved_days_off)
 
-            # Calculate attendance days and missing days
+            # Calculate attendance days
             sheet['prev_approved_days_off'] = previous_approved_days_off
             sheet['approved_days_off'] = approved_days_off_current_month
             sheet['att_day'] = sheet['days_worked'] + approved_days_off_current_month
@@ -329,7 +329,7 @@ def total_salary(request):
             # Calculate bonuses, penalties, and salary
             sheet['ot_sal'] = Decimal(100000) * Decimal(sheet['ot_sum'])
             sheet['awrd'] = Decimal(1000000) if sheet['ot_sum'] > 15 else Decimal(2000000) if sheet['ot_sum'] > 20 else 0
-            sheet['neg_sal'] = Decimal(100000) * Decimal(sheet['late_time'])
+            sheet['neg_sal'] = Decimal(100000) * Decimal(sheet['lt_sum'])
             sheet['real_salary'] = int(sheet['total_salary'] / Decimal(26) * sheet['att_day'])
 
             # Calculate deductions for BHXH and TNCN
@@ -343,7 +343,7 @@ def total_salary(request):
             sheet['tncn'] = tncn
 
             # Calculate final salary
-            real_sal = sheet['real_salary'] - sheet['neg_sal'] - bhxh - tncn + sheet['awrd'] + sheet['ot_sal']
+            real_sal = sheet['real_salary'] + sheet['awrd'] + sheet['ot_sal'] - sheet['neg_sal'] - bhxh - tncn
             sheet['real_sal'] = real_sal
 
         return render(request, 'pages/total_salary.html', {
@@ -359,7 +359,7 @@ def total_salary(request):
         })
 
     else:
-        messages.warning(request, 'Không có quyền truy cập')
+        messages.warning(request, 'Bạn không có quyền truy cập!')
         return redirect('/')
 
 
@@ -380,8 +380,10 @@ def letter(request):
       if time == 'Hôm nay':
         letters=letters.filter(created_at__date=now.date())
       elif 'ngày qua' in time:
-        time_days_ago = now - timedelta(days=int(time[0]))
-        letters = letters.filter(created_at__gte=time_days_ago)
+          days = int(time.split()[0])
+          time_days_ago = now - timedelta(days=days)
+          letters = letters.filter(created_at__gte=time_days_ago)
+
     paginator = Paginator(letters, 10)
     page_number = request.GET.get('page', '')
     try:
@@ -411,6 +413,15 @@ def admin_review_requests(request):
     status = request.GET.get('status', '')
     start_date = request.GET.get('start-date', '')
     end_date = request.GET.get('end-date', '')
+    # Filter by keyword (username)
+    keyword = request.GET.get('keyword', '')
+    if keyword:
+        requests = requests.filter(user__username__icontains=keyword)
+
+    # Filter by department
+    dpm_req = request.GET.get('dpm', '')
+    if dpm_req and dpm_req != "Tất cả":
+        requests = requests.filter(user__profile__position__department__name=dpm_req)
     if status:
       if status == 'Đang chờ':
         requests = requests.filter(status='pending')
@@ -449,5 +460,8 @@ def admin_review_requests(request):
                'end_date': end_date,
                'status': status,
                'page_obj': page_obj,
-               'query_params': query_params.urlencode()}
+               'query_params': query_params.urlencode(),
+               'dpm_req': dpm_req,
+               'dpms': Department.objects.all(),
+               }
     return render(request, 'pages/admin_review_requests.html', context)
